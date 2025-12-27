@@ -1,4 +1,4 @@
-import 'dotenv/config' // Ensure this is at the very top
+import 'dotenv/config'
 import express from 'express'
 import ImageKit from 'imagekit'
 import cors from 'cors'
@@ -12,7 +12,8 @@ const app = express()
 
 app.use(express.json())
 
-// FIXED: Ensure no trailing slash in your Render environment variable for CLIENT_URL
+// 1. CORS Configuration
+// Ensure process.env.CLIENT_URL has NO trailing slash in Render settings
 app.use(
   cors({
     origin: process.env.CLIENT_URL,
@@ -35,13 +36,48 @@ const imagekit = new ImageKit({
   privateKey: process.env.IMAGE_KIT_PRIVATE_KEY,
 })
 
+// --- ROUTES ---
+
 app.get('/api/upload', (req, res) => {
   const result = imagekit.getAuthenticationParameters()
   res.send(result)
 })
 
-// --- ROUTES ---
+// GET USER CHATS - Protected
+app.get('/api/userchats', ClerkExpressRequireAuth(), async (req, res) => {
+  const userId = req.auth.userId // Provided by the Bearer token
 
+  try {
+    const userChats = await UserChats.findOne({ userId })
+
+    // If no chats found, return an empty array instead of 404/500
+    if (!userChats) {
+      return res.status(200).send([])
+    }
+
+    res.status(200).send(userChats.chats)
+  } catch (err) {
+    console.error('Error in /api/userchats:', err)
+    res.status(500).send('Error fetching userchats!')
+  }
+})
+
+// GET SINGLE CHAT - Protected
+app.get('/api/chats/:id', ClerkExpressRequireAuth(), async (req, res) => {
+  const userId = req.auth.userId
+
+  try {
+    const chat = await Chat.findOne({ _id: req.params.id, userId })
+    if (!chat) return res.status(404).send('Chat not found')
+
+    res.status(200).send(chat)
+  } catch (err) {
+    console.error('Error in /api/chats/:id:', err)
+    res.status(500).send('Error fetching chat!')
+  }
+})
+
+// CREATE CHAT - Protected
 app.post('/api/chats', ClerkExpressRequireAuth(), async (req, res) => {
   const userId = req.auth.userId
   const { text } = req.body
@@ -53,9 +89,9 @@ app.post('/api/chats', ClerkExpressRequireAuth(), async (req, res) => {
     })
 
     const savedChat = await newChat.save()
-    const userChats = await UserChats.find({ userId: userId })
+    const userChats = await UserChats.findOne({ userId })
 
-    if (!userChats.length) {
+    if (!userChats) {
       const newUserChats = new UserChats({
         userId: userId,
         chats: [{ _id: savedChat._id, title: text.substring(0, 40) }],
@@ -73,69 +109,22 @@ app.post('/api/chats', ClerkExpressRequireAuth(), async (req, res) => {
     }
     res.status(201).send(savedChat._id)
   } catch (err) {
-    console.error(err)
+    console.error('Error in POST /api/chats:', err)
     res.status(500).send('Error creating chat!')
-  }
-})
-
-app.get('/api/userchats', ClerkExpressRequireAuth(), async (req, res) => {
-  const userId = req.auth.userId
-
-  try {
-    // FIXED: Using findOne and adding a check if user exists
-    const userChats = await UserChats.findOne({ userId })
-
-    if (!userChats) {
-      return res.status(200).send([])
-    }
-
-    res.status(200).send(userChats.chats)
-  } catch (err) {
-    console.error(err)
-    res.status(500).send('Error fetching userchats!')
-  }
-})
-
-app.get('/api/chats/:id', ClerkExpressRequireAuth(), async (req, res) => {
-  const userId = req.auth.userId
-  try {
-    const chat = await Chat.findOne({ _id: req.params.id, userId })
-    res.status(200).send(chat)
-  } catch (err) {
-    console.error(err)
-    res.status(500).send('Error fetching chat!')
-  }
-})
-
-app.put('/api/chats/:id', ClerkExpressRequireAuth(), async (req, res) => {
-  const userId = req.auth.userId
-  const { question, answer, img } = req.body
-
-  const newItems = [
-    ...(question
-      ? [{ role: 'user', parts: [{ text: question }], ...(img && { img }) }]
-      : []),
-    { role: 'model', parts: [{ text: answer }] },
-  ]
-
-  try {
-    const updatedChat = await Chat.updateOne(
-      { _id: req.params.id, userId },
-      { $push: { history: { $each: newItems } } }
-    )
-    res.status(200).send(updatedChat)
-  } catch (err) {
-    console.error(err)
-    res.status(500).send('Error adding conversation!')
   }
 })
 
 // --- ERROR HANDLING ---
 
-// IMPROVED: Logs the specific reason Clerk failed in your Render console
+// The global error handler catches the 401 thrown by ClerkExpressRequireAuth
 app.use((err, req, res, next) => {
-  console.error('Clerk Auth Error:', err)
-  res.status(401).send('Unauthenticated!')
+  // CRITICAL: Check your Render console for this log!
+  console.error('AUTH ERROR:', err.message)
+
+  res.status(401).send({
+    message: 'Unauthenticated!',
+    details: err.message, // Helps debugging on the frontend
+  })
 })
 
 app.listen(port, () => {
